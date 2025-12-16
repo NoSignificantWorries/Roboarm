@@ -1,26 +1,9 @@
-# ---
-# jupyter:
-#   jupytext:
-#     formats: ipynb,py:percent
-#     text_representation:
-#       extension: .py
-#       format_name: percent
-#       format_version: '1.3'
-#       jupytext_version: 1.18.1
-#   kernelspec:
-#     display_name: Python 3 (ipykernel)
-#     language: python
-#     name: python3
-# ---
-
-# %%
-import sys
-import logging
 import time
 import math
 
-# Based on Adafruit Lib:
-# https://github.com/adafruit/Adafruit_Python_PCA9685/blob/master/Adafruit_PCA9685/PCA9685.py
+import smbus
+import numpy as np
+from scipy.interpolate import RBFInterpolator
 
 # Default address:
 PCA9685_ADDRESS    = 0x40
@@ -162,9 +145,6 @@ class ServoPCA9685(object):
         time.sleep(0.005)
 
 
-# %%
-import smbus
-
 i2cBus = smbus.SMBus(3)
 pca9685 = PCA9685(i2cBus)
 servo_vrah = ServoPCA9685(pca9685, CHANNEL00)
@@ -172,36 +152,180 @@ servo_pl1 = ServoPCA9685(pca9685, CHANNEL01)
 servo_pl2 = ServoPCA9685(pca9685, CHANNEL02)
 # servo_vr_zh = ServoPCA9685(pca9685, CHANNEL03)
 
-def rotate_handle(alpha=0, beta=0, gamma=0, delay=0.1):
-    servo_vrah.set_pulse(alpha)
-    time.sleep(delay)
-    servo_pl1.set_pulse(beta)
-    time.sleep(delay)
-    servo_pl2.set_pulse(gamma)
+def rotate_handle(alpha=0, beta=0, gamma=0, delay=0.1, with_up=False):
+    if with_up:
+        servo_pl2.set_pulse(220)
+        time.sleep(0.2)
+    servo_vrah.set_pulse(int(alpha))
+    servo_pl1.set_pulse(int(beta))
+    servo_pl2.set_pulse(int(gamma))
     time.sleep(delay)
 
 
 # start
 rotate_handle()
 ALPHA = 285
-BETA = 345
-GAMMA = 140
+BETA = 350
+GAMMA = 135
 rotate_handle(delay=0.5)
-
-# loop
-
-BETA = 400
+time.sleep(2)
 rotate_handle(ALPHA, BETA, GAMMA, delay=0.5)
-
 time.sleep(2)
 
+# loop
+points_arm = np.array([
+    [330, 430, 200],
+    [285, 405, 180],
+    [240, 430, 200],
+    [350, 355, 155],
+    [285, 350, 135],
+    [220, 355, 155],
+    [285, 370, 160]
+])
+points = np.array([
+    [-1, 1],
+    [0, 1],
+    [1, 1],
+    [-1, 0],
+    [0, 0],
+    [1, 0],
+    [0, 0.5]
+])
+
+points_interpolator = RBFInterpolator(points, points_arm)
+
+
+def line(start, end, n):
+    start = np.array(start)
+    end = np.array(end)
+    
+    t = np.linspace(0, 1, n)
+
+    points = start + t[:, np.newaxis] * (end - start)
+
+    return points
+
+
+path1 = np.array([
+    [-0.3, 0],
+    [-0.3, 0.6],
+    [0, 0.6],
+    [0.3, 0.6],
+    [0.3, 0.0],
+    [0, 0.0],
+    [-0.3, 0.0]
+])
+
+alphabet = {
+    "R": np.array([
+        [-0.4, 0],
+        [-0.4, 0.2],
+        [-0.4, 0.4],
+        [-0.2, 0.4],
+        [-0.2, 0.2],
+        [-0.4, 0.2],
+        [-0.2, 0.0]
+    ]),
+    "O": np.array([
+        [-0.1, 0],
+        [-0.1, 0.4],
+        [0.1, 0.4],
+        [0.1, 0],
+        [-0.1, 0]
+    ]),
+    "S": np.array([
+        [0.2, 0],
+        [0.4, 0],
+        [0.4, 0.2],
+        [0.2, 0.2],
+        [0.2, 0.4],
+        [0.4, 0.4]
+    ]),
+    "h": np.array([
+        [-0.4, 0],
+        [-0.4, 0.2],
+        [-0.4, 0.4],
+        [-0.4, 0.2],
+        [-0.2, 0.2],
+        [-0.2, 0]
+    ]),
+    "C": np.array([
+        [0.4, 0],
+        [0.2, 0],
+        [0.2, 0.2],
+        [0.2, 0.4],
+        [0.4, 0.4]
+    ]),
+    "U": np.array([
+        [-0.4, 0.4],
+        [-0.4, 0.2],
+        [-0.4, 0],
+        [-0.2, 0],
+        [-0.2, 0.2],
+        [-0.2, 0.4],
+        [-0.2, 0.4]
+    ]),
+    "n": np.array([
+        [-0.4, 0],
+        [-0.4, 0.2],
+        [-0.4, 0.4],
+        [-0.2, 0.4],
+        [-0.2, 0.2],
+        [-0.2, 0]
+    ]),
+}
+
+
+def run_path(path, offset_x=0, offset_y=0):
+    path[:, 0] += offset_x
+    path[:, 1] += offset_y
+    path_for_arm = points_interpolator(path)
+    rotate_handle(*path_for_arm[0], with_up=True)
+    time.sleep(1)
+    for i in range(path_for_arm.shape[0] - 1):
+        start = path_for_arm[i]
+        end = path_for_arm[i + 1]
+        for p in line(start, end, 11):
+            rotate_handle(*p, 0.05)
+        time.sleep(1)
+
+
+'''
+run_path(alphabet["R"], 0, 0.1)
+time.sleep(1)
+run_path(alphabet["O"], 0, 0.1)
+time.sleep(1)
+run_path(alphabet["S"], 0, 0.1)
+time.sleep(1)
+'''
+'''
+run_path(alphabet["h"], 0, 0.1)
+time.sleep(1)
+run_path(alphabet["O"], 0, 0.1)
+time.sleep(1)
+run_path(alphabet["C"], 0, 0.1)
+time.sleep(1)
+'''
+run_path(alphabet["U"], 0, 0.1)
+time.sleep(1)
+run_path(alphabet["O"], 0, 0.1)
+time.sleep(1)
+run_path(alphabet["R"], 0.8, 0.1)
+time.sleep(1)
+'''
+run_path(alphabet["n"], 0, 0.1)
+time.sleep(1)
+run_path(alphabet["O"], 0, 0.1)
+time.sleep(1)
+run_path(alphabet["C"], 0, 0.1)
+time.sleep(1)
+'''
+
+
 # exit
-rotate_handle(delay=0.5)
-rotate_handle(285, 350, 100, 0.5)
+rotate_handle(285, 350, 100, 0.5, with_up=True)
 
 servo_vrah.disable()
 servo_pl1.disable()
 servo_pl2.disable()
-
-sys.exit(0)
 
